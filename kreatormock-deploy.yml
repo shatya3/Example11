@@ -1,0 +1,45 @@
+name: Kreator Mock Deployment
+on:
+  push:
+      branches:
+        - kreator-mock
+env:
+  APPLICATION_PROPERTIES: ${{ secrets.KREATORMOCK_APPLICATION_PROPERTIES }}
+  HEROKU_API_KEY: ${{ secrets.KREATORMOCK_HEROKU_API_KEY }}
+  DATABASE_URI: ${{ secrets.KREATORMOCK_DATABASE_URI }}
+  
+jobs:
+  db_schema_setup:
+    name: Database Schema Setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Psql
+        run: sudo apt install -y postgresql-client
+      - name: Modify sql file to include db username (extract username from database URI)
+        run: sed s/\<username\>/$(echo ${{ env.DATABASE_URI }} | grep -oP "(?<=\/)[^/:]+(?=:)")/g -i database-deployment.sql
+      - name: Run psql on db server to set up db schema
+        run: psql ${{ env.DATABASE_URI }} -f database-deployment.sql
+
+  build:
+    name: Build And Deploy
+    runs-on: ubuntu-latest
+    needs: [db_schema_setup]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-java@v1
+        with:
+          java-version: 1.8 
+      - name: Set up application properties
+        run: echo -e $APPLICATION_PROPERTIES > src/main/resources/application.properties && cat src/main/resources/application.properties
+      - name: MVN Clean Install
+        run:  mvn clean install
+      - name: Move Build files
+        run:  mkdir build && mv target/kreatorRestServices.war build/ && mv target/dependency/webapp-runner.jar build/ && mv Procfile build/
+      - uses: actions/setup-ruby@v1
+        with:
+          ruby-version: '2.6'
+      - name: Install dpl
+        run: gem install dpl
+      - name: Deploy to heroku
+        run: cd build && dpl --provider=heroku --app=${GITHUB_REF#refs/heads/} --api-key=${{ env.HEROKU_API_KEY }} --skip_cleanup
